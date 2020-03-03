@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 
-REQUIRED_OS_DISTRIBUTOR_ID="Ubuntu"
-REQUIRED_OS_RELEASE="18.04"
+REQUIRED_OS_DISTRIBUTOR_ID="CentOS"
+REQUIRED_OS_RELEASE="8.0.1905"
 REQUIRED_DOCKER_VERSION="19.03.6"
 INSTALL_PATH="$(pwd)"
 ENV="local"
 DOCKER_DOWNLOAD_HOST="download.docker.com"
-CONFLICTING_PACKAGES="docker docker-engine docker.io containerd runc"
-CONFLICTING_SNAP_PACKAGES="docker"
-PREREQUIRED_PACKAGES="git apt-transport-https ca-certificates curl gnupg-agent software-properties-common net-tools lsof"
-REQUIRED_PACKAGES="docker-ce docker-ce-cli containerd.io docker-compose"
+CONFLICTING_PACKAGES="runc"
+PREREQUIRED_PACKAGES="git ca-certificates curl device-mapper-persistent-data lvm2 net-tools lsof"
+REQUIRED_PACKAGES="docker-ce docker-ce-cli containerd.io"
 MIP_GITHUB_OWNER="HBPMedical"
 MIP_GITHUB_PROJECT="mip-deployment"
 MIP_BRANCH="master"
@@ -22,8 +21,23 @@ _get_docker_main_ip(){
 	fi
 }
 
+_has_minimum_version(){
+	local current=$1
+	local required=$2
+	local version_check=`(echo $required; echo $current)|sort -Vk3|tail -1`
+	if [ "$version_check" = "$required" -a "$required" != "$current" ]; then
+		return 1
+	fi
+	return 0
+}
+
 check_os(){
-	if [ "$(lsb_release -si)" != "$REQUIRED_OS_DISTRIBUTOR_ID" -o "$(lsb_release -sr)" != "$REQUIRED_OS_RELEASE" ]; then
+	if [ "$(command -v lsb_release)" = "" ]; then
+		dnf install redhat-lsb -y
+	fi
+	#if [ "$(lsb_release -si)" != "$REQUIRED_OS_DISTRIBUTOR_ID" -o "$(lsb_release -sr)" != "$REQUIRED_OS_RELEASE" ]; then
+	_has_minimum_version $(lsb_release -sr) $REQUIRED_OS_RELEASE
+	if [ $? -ne 0 -o "$(lsb_release -si)" != "$REQUIRED_OS_DISTRIBUTOR_ID" ]; then
 		echo "Required OS version: $REQUIRED_OS_DISTRIBUTOR_ID $REQUIRED_OS_RELEASE!"
 		exit 1
 	fi
@@ -32,7 +46,7 @@ check_os(){
 check_conflicting_packages(){
 	local packages=""
 	for package in $CONFLICTING_PACKAGES; do
-		local match=$(dpkg --list|grep -E "^ii[ \t]+$package[ \t]+")
+		local match=$(dnf list installed|grep "$package\.")
 		if [ "$match" != "" ]; then
 			packages="$packages $package"
 		fi
@@ -43,52 +57,24 @@ check_conflicting_packages(){
 	fi
 }
 
-check_conflicting_snap_packages(){
-	local packages=""
-	for package in $CONFLICTING_SNAP_PACKAGES; do
-		local match=$(snap list 2>/dev/null|grep "^$package[ \t]")
-		if [ "$match" != "" ]; then
-			packages="$packages $package"
-		fi
-	done
-
-	if [ "$packages" != "" ]; then
-		echo "Conflicting Snap packages detected		: $packages" && echo
-	fi
-}
-
-uninstall_conflicting_snap_packages(){
-	local next=0
-	while [ $next -eq 0 ]; do
-		local packages=""
-		next=1
-		for package in $CONFLICTING_SNAP_PACKAGES; do
-			local match=$(snap list 2>/dev/null|grep "^$package[ \t]")
-			if [ "$match" != "" ]; then
-				packages="$packages $package"
-				next=0
-			fi
-		done
-		if [ $next -eq 0 ]; then
-			snap remove $packages
-		fi
-	done
-}
-
 uninstall_conflicting_packages(){
 	local next=0
 	while [ $next -eq 0 ]; do
 		local packages=""
 		next=1
 		for package in $CONFLICTING_PACKAGES; do
-			local match=$(dpkg --list|grep -E "^ii[ \t]+$package[ \t]+")
+			local match=$(dnf list installed|grep "$package\.")
 			if [ "$match" != "" ]; then
 				packages="$packages $package"
 				next=0
 			fi
 		done
+		local uninstall_option=""
+		if [ "$1" = "-y" ]; then
+			uninstall_option=$1
+		fi
 		if [ $next -eq 0 ]; then
-			apt remove $packages
+			dnf remove $uninstall_option $packages
 		fi
 	done
 }
@@ -110,7 +96,7 @@ install_required_packages(){
 			local packages=""
 			next=1
 			for package in $required_packages; do
-				local match=$(dpkg --list|grep "^ii.*$package ")
+				local match=$(dnf list installed|grep "$package\.")
 				if [ "$match" = "" ]; then
 					packages="$packages $package"
 					next=0
@@ -121,26 +107,40 @@ install_required_packages(){
 				install_option=$2
 			fi
 			if [ $next -eq 0 ]; then
-				apt install $install_option $packages
+				dnf install $install_option --nobest $packages
 			fi
 		done
 	fi
 }
 
-prepare_docker_apt_sources(){
+prepare_docker_repository(){
 	local next=0
 	while [ $next -eq 0 ]; do
 		next=1
-		if [ "$(apt-key fingerprint 0EBFCD88 2>/dev/null)" = "" ]; then
-			curl -fsSL https://$DOCKER_DOWNLOAD_HOST/linux/ubuntu/gpg | apt-key add -
-			next=0
-		fi
-		if [ "$(grep -R $DOCKER_DOWNLOAD_HOST /etc/apt)" = "" ]; then
-			add-apt-repository "deb [arch=amd64] https://$DOCKER_DOWNLOAD_HOST/linux/ubuntu $(lsb_release -cs) stable"
-			apt update
+		if [ "$(grep -R $DOCKER_DOWNLOAD_HOST /etc/yum.repos.d)" = "" ]; then
+			dnf config-manager --add-repo https://$DOCKER_DOWNLOAD_HOST/linux/centos/docker-ce.repo
 			next=0
 		fi
 	done
+}
+
+install_docker_compose(){
+	local docker_compose_latest=$(curl --silent "https://api.github.com/repos/docker/compose/releases/latest"|grep '"tag_name"'|sed -E 's/.*"([^"]+)".*/\1/')
+	local download=0
+	if [ -f /usr/local/bin/docker-compose ]; then
+		local docker_compose_current=$(docker-compose --version|cut -d, -f1|awk '{print $NF}')
+		#local docker_compose_check=`(echo $docker_compose_latest; echo $docker_compose_current)|sort -Vk3|tail -1`
+		#if [ "$docker_compose_check" = "$docker_compose_latest" -a "$docker_compose_latest" != "$docker_compose_current" ]; then
+		_has_minimum_version $docker_compose_current $docker_compose_latest
+		if [ $? -ne 0 ]; then
+			download=1
+		fi
+	fi
+
+	if [ $download -eq 1 ]; then
+		curl --silent -L https://github.com/docker/compose/releases/download/$docker_compose_latest/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+		chmod +x /usr/local/bin/docker-compose
+	fi
 }
 
 contains(){
@@ -154,8 +154,10 @@ check_docker(){
 	fi
 
 	local dockerversion=$(docker --version|awk '{print $3}'|cut -d',' -f1)
-	local dockercheck=`(echo $REQUIRED_DOCKER_VERSION; echo $dockerversion)|sort -Vk3|tail -1`
-	if [ "$dockercheck" = "$REQUIRED_DOCKER_VERSION" -a "$REQUIRED_DOCKER_VERSION" != "$dockerversion" ]; then
+	#local dockercheck=`(echo $REQUIRED_DOCKER_VERSION; echo $dockerversion)|sort -Vk3|tail -1`
+	#if [ "$dockercheck" = "$REQUIRED_DOCKER_VERSION" -a "$REQUIRED_DOCKER_VERSION" != "$dockerversion" ]; then
+	_has_minimum_version $dockerversion $REQUIRED_DOCKER_VERSION
+	if [ $? -ne 0 ]; then
 		echo "docker version $REQUIRED_DOCKER_VERSION is required!"
 		exit 1
 	fi
@@ -393,7 +395,6 @@ main(){
 		check-required)
 			check_os
 			check_conflicting_packages
-			check_conflicting_snap_packages
 			check_docker
 			check_exareme_required_ports
 			echo "ok"
@@ -419,11 +420,11 @@ main(){
 			check_os
 			stop_mip
 			delete_mip
-			uninstall_conflicting_packages
-			uninstall_conflicting_snap_packages
+			uninstall_conflicting_packages $2
 			install_required_packages prerequired $2
-			prepare_docker_apt_sources
+			prepare_docker_repository
 			install_required_packages required $2
+			install_docker_compose
 			check_exareme_required_ports
 			download_mip $2
 			if [ "$2" = "-y" ]; then
@@ -432,9 +433,9 @@ main(){
 				echo -n "Run MIP [y/n]? "
 				read answer
 			fi
-			if [ "$answer" = "y" ]; then
-				run_mip
-			fi
+			#if [ "$answer" = "y" ]; then
+			#	run_mip
+			#fi
 			;;
 		*)
 			echo "Usage: $0 [check-required|install|uninstall|start|stop|status|status-details|restart|logs]"
