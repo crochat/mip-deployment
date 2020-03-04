@@ -35,7 +35,6 @@ check_os(){
 	if [ "$(command -v lsb_release)" = "" ]; then
 		dnf install redhat-lsb -y
 	fi
-	#if [ "$(lsb_release -si)" != "$REQUIRED_OS_DISTRIBUTOR_ID" -o "$(lsb_release -sr)" != "$REQUIRED_OS_RELEASE" ]; then
 	_has_minimum_version $(lsb_release -sr) $REQUIRED_OS_RELEASE
 	if [ $? -ne 0 -o "$(lsb_release -si)" != "$REQUIRED_OS_DISTRIBUTOR_ID" ]; then
 		echo "Required OS version: $REQUIRED_OS_DISTRIBUTOR_ID $REQUIRED_OS_RELEASE!"
@@ -126,14 +125,12 @@ prepare_docker_repository(){
 
 install_docker_compose(){
 	local docker_compose_latest=$(curl --silent "https://api.github.com/repos/docker/compose/releases/latest"|grep '"tag_name"'|sed -E 's/.*"([^"]+)".*/\1/')
-	local download=0
+	local download=1
 	if [ -f /usr/local/bin/docker-compose ]; then
 		local docker_compose_current=$(docker-compose --version|cut -d, -f1|awk '{print $NF}')
-		#local docker_compose_check=`(echo $docker_compose_latest; echo $docker_compose_current)|sort -Vk3|tail -1`
-		#if [ "$docker_compose_check" = "$docker_compose_latest" -a "$docker_compose_latest" != "$docker_compose_current" ]; then
 		_has_minimum_version $docker_compose_current $docker_compose_latest
-		if [ $? -ne 0 ]; then
-			download=1
+		if [ $? -eq 0 ]; then
+			download=0
 		fi
 	fi
 
@@ -154,12 +151,24 @@ check_docker(){
 	fi
 
 	local dockerversion=$(docker --version|awk '{print $3}'|cut -d',' -f1)
-	#local dockercheck=`(echo $REQUIRED_DOCKER_VERSION; echo $dockerversion)|sort -Vk3|tail -1`
-	#if [ "$dockercheck" = "$REQUIRED_DOCKER_VERSION" -a "$REQUIRED_DOCKER_VERSION" != "$dockerversion" ]; then
 	_has_minimum_version $dockerversion $REQUIRED_DOCKER_VERSION
 	if [ $? -ne 0 ]; then
 		echo "docker version $REQUIRED_DOCKER_VERSION is required!"
 		exit 1
+	fi
+}
+
+ensure_running_dockerd(){
+	check_docker
+	if [ "$(pgrep -x dockerd)" = "" ]; then
+		enabled=$(systemctl status docker|grep 'Loaded:'|awk '{print $4}'|cut -d\; -f1)
+		status=$(systemctl status docker|grep 'Active:'|awk '{print $2}')
+		if [ "$enabled" != "disabled" ]; then
+			systemctl --quiet enable docker
+		fi
+		if [ "$status" = "inactive" ]; then
+			systemctl --quiet start docker
+		fi
 	fi
 }
 
@@ -288,6 +297,8 @@ download_mip(){
 }
 
 run_mip(){
+	ensure_running_dockerd
+
 	local images_list="mip_frontend_1 mip_portalbackend_1 mip_portalbackend_db_1 mip_galaxy_1 mip_keycloak_1 mip_keycloak_db_1 mip_exareme_master_1 mip_exareme_keystore_1"
 	local ko_list=""
 	for image in $images_list; do
@@ -433,9 +444,9 @@ main(){
 				echo -n "Run MIP [y/n]? "
 				read answer
 			fi
-			#if [ "$answer" = "y" ]; then
-			#	run_mip
-			#fi
+			if [ "$answer" = "y" ]; then
+				run_mip
+			fi
 			;;
 		*)
 			echo "Usage: $0 [check-required|install|uninstall|start|stop|status|status-details|restart|logs]"
