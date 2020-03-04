@@ -4,7 +4,7 @@ This is the MIP6 ready **local** deployment script.
 
 * In order to fix the default *PATH* for users in CentOS, execute the following:
 ```bash
-cat <<EOF >/etc/profile.d/path.sh
+sudo cat <<EOF >/etc/profile.d/path.sh
 paths="/usr/local/bin /usr/local/sbin"
 
 for path in \$paths; do
@@ -28,17 +28,18 @@ mv mip-deployment/local_deployment.sh /usr/local/bin/mip
 ```
 * Then, just call *mip* with its options to auto-do the setup: start, stop, status, whatever required
 ```bash
-mip install -y
+sudo source /etc/profile.d/path.sh
+sudo mip install -y
 ```
 ```bash
-mip status
+sudo mip status
 ```
 * If you have issues, sometimes, doing it may save you
 ```bash
-mip restart
+sudo mip restart
 ```
 * Or even, in case of real problems
 ```bash
-mip stop --force
-mip start
+sudo mip stop --force
+sudo mip start
 ```
