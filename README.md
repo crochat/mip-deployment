@@ -24,7 +24,7 @@ sed --in-place 's/^INSTALL_PATH.*/INSTALL_PATH="\/opt\/mip"/' mip-deployment/loc
 ```
 * Then, you may move the script to use it later the easy way
 ```bash
-mv mip-deployment/local_deployment.sh /usr/local/bin/mip
+sudo mv mip-deployment/local_deployment.sh /usr/local/bin/mip
 ```
 * Then, just call *mip* with its options to auto-do the setup: start, stop, status, whatever required
 ```bash
