@@ -7,8 +7,9 @@ INSTALL_PATH="$(pwd)"
 ENV="local"
 DOCKER_DOWNLOAD_HOST="download.docker.com"
 CONFLICTING_PACKAGES="runc"
-PREREQUIRED_PACKAGES="git ca-certificates curl device-mapper-persistent-data lvm2 net-tools lsof"
+PREREQUIRED_PACKAGES="git ca-certificates curl device-mapper-persistent-data lvm2 net-tools lsof python2"
 REQUIRED_PACKAGES="containerd.io@https://$DOCKER_DOWNLOAD_HOST/linux/centos/7/x86_64/stable/Packages/containerd.io-1.2.6-3.3.el7.x86_64.rpm docker-ce docker-ce-cli"
+REQUIRED_PIP3_PACKAGES="chardet"
 MIP_GITHUB_OWNER="HBPMedical"
 MIP_GITHUB_PROJECT="mip-deployment"
 MIP_BRANCH="master"
@@ -79,7 +80,7 @@ uninstall_conflicting_packages(){
 }
 
 install_required_packages(){
-	if [ "$1" = "prerequired" -o "$1" = "required" ]; then
+	if [ "$1" = "prerequired" -o "$1" = "required" -o "$1" = "pip3" ]; then
 		local required_packages=""
 		case "$1" in
 			"prerequired")
@@ -87,6 +88,9 @@ install_required_packages(){
 				;;
 			"required")
 				required_packages=$REQUIRED_PACKAGES
+				;;
+			"pip3")
+				required_packages=$REQUIRED_PIP3_PACKAGES
 				;;
 		esac
 
@@ -97,7 +101,12 @@ install_required_packages(){
 			for package in $required_packages; do
 				local package_name=$(echo $package|cut -d@ -f1)
 				local package_long=$(echo $package|cut -d@ -f2)
-				local match=$(dnf list installed|grep "$package_name\.")
+				local match=""
+				if [ "$1" = "pip3" ]; then
+					match=$(pip3 list --format=columns|grep "^$package_name "|awk '{print $1}')
+				else
+					match=$(dnf list installed|grep "$package_name\.")
+				fi
 				if [ "$match" = "" ]; then
 					packages="$packages $package_long"
 					next=0
@@ -108,9 +117,19 @@ install_required_packages(){
 				install_option=$2
 			fi
 			if [ $next -eq 0 ]; then
-				dnf install $install_option --nobest $packages
+				if [ "$1" = "pip3" ]; then
+					pip3 install $packages
+				else
+					dnf install $install_option --nobest $packages
+				fi
 			fi
 		done
+	fi
+}
+
+link_python2(){
+	if [ "$(command -v python)" = "" ]; then
+		ln -s python2 /bin/python
 	fi
 }
 
@@ -298,8 +317,16 @@ download_mip(){
 	cd $path
 }
 
+prepare_mip_env(){
+	local ip=$(hostname -I | awk '{print $1}')
+	cat << EOF > $INSTALL_PATH/$ENV/$MIP_GITHUB_PROJECT/.env
+PUBLIC_MIP_IP=$ip
+EOF
+}
+
 run_mip(){
 	ensure_running_dockerd
+	prepare_mip_env
 
 	local images_list="mip_frontend_1 mip_portalbackend_1 mip_portalbackend_db_1 mip_galaxy_1 mip_keycloak_1 mip_keycloak_db_1 mip_exareme_master_1 mip_exareme_keystore_1"
 	local ko_list=""
@@ -435,8 +462,10 @@ main(){
 			delete_mip
 			uninstall_conflicting_packages $2
 			install_required_packages prerequired $2
+			link_python2
 			prepare_docker_repository
 			install_required_packages required $2
+			install_required_packages pip3 $2
 			install_docker_compose
 			check_exareme_required_ports
 			download_mip $2
