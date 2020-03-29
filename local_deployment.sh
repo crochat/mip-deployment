@@ -475,7 +475,7 @@ main(){
 				echo -n "Run MIP [y/n]? "
 				read answer
 			fi
-			if [ "$answer" = "y" ]; then
+			if [ "$answer" = "y" -a "$3" != "--no-run" ]; then
 				run_mip
 			fi
 			;;
